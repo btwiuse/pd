@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -12,9 +13,11 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
+
+	"pd/swg"
 
 	"github.com/btwiuse/pretty"
-	"github.com/remeh/sizedwaitgroup"
 )
 
 // stdin -> ScanFrom -> pd.in -> Run -> pd.out -> SendTo -> stdout
@@ -24,7 +27,9 @@ func main() {
 	pd := New(config.Jobs, config.Template)
 	go pd.ScanFrom(os.Stdin)
 	go pd.SendTo(os.Stdout)
+	go pd.ReportStart(config.ReportInterval)
 	pd.Run()
+	pd.ReportStop()
 }
 
 // Factory manufactores Job
@@ -68,13 +73,15 @@ func parseFlags() *Config {
 	config := &Config{}
 	flag.StringVar(&config.Template, "t", "", "url template, like https://example.com/%s.json")
 	flag.IntVar(&config.Jobs, "j", 3, "parallel jobs")
+	flag.IntVar(&config.ReportInterval, "i", 1, "report interval")
 	flag.Parse()
 	return config
 }
 
 type Config struct {
-	Jobs     int
-	Template string
+	Jobs           int
+	Template       string
+	ReportInterval int
 }
 
 // Result is Job result
@@ -92,11 +99,14 @@ func (r *Result) String() string {
 
 // ParallelDownloader wraps Qlock and Factory
 func New(j int, t string) *ParallelDownloader {
+	lctx, lcancel := context.WithCancel(context.Background())
 	return &ParallelDownloader{
-		in:             make(chan string),
-		out:            make(chan *Result),
-		Factory:        &Factory{t},
-		SizedWaitGroup: sizedwaitgroup.New(j),
+		in:        make(chan string),
+		out:       make(chan *Result),
+		Factory:   &Factory{t},
+		WaitGroup: swg.New(j),
+		lctx:      lctx,
+		lcancel:   lcancel,
 	}
 }
 
@@ -104,7 +114,10 @@ type ParallelDownloader struct {
 	in  chan string
 	out chan *Result
 	*Factory
-	sizedwaitgroup.SizedWaitGroup
+	*swg.WaitGroup
+	counter int
+	lctx    context.Context
+	lcancel context.CancelFunc
 }
 
 func (p *ParallelDownloader) Run() {
@@ -163,6 +176,32 @@ func (p *ParallelDownloader) SendTo(w io.Writer) {
 			break
 		}
 		logger.Print(result)
+		p.counter++
 	}
 	p.Done()
+}
+
+func (p *ParallelDownloader) ReportHead() {
+	log.Printf("%8s %8s\n", "doing", "done")
+}
+
+func (p *ParallelDownloader) ReportOnce() {
+	log.Printf("%8d %8d\n", p.Len(), p.counter)
+}
+
+func (p *ParallelDownloader) ReportStart(d int) {
+	p.ReportHead()
+	for {
+		p.ReportOnce()
+		select {
+		case <-time.After(time.Duration(d) * time.Second):
+		case <-p.lctx.Done():
+			return
+		}
+	}
+}
+
+func (p *ParallelDownloader) ReportStop() {
+	p.lcancel()
+	p.ReportOnce()
 }

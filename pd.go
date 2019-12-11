@@ -144,10 +144,12 @@ type ParallelDownloader struct {
 	out    chan *Result
 	*Factory
 	*swg.WaitGroup
-	counter   int
-	prevcount int
-	lctx      context.Context
-	lcancel   context.CancelFunc
+	counter        int
+	prevcount      int
+	retrycount     int
+	prevretrycount int
+	lctx           context.Context
+	lcancel        context.CancelFunc
 }
 
 func (p *ParallelDownloader) Run() {
@@ -164,10 +166,13 @@ func (p *ParallelDownloader) Run() {
 			defer p.Done() // will always run whether retry or normal return
 			job := p.Job(id)
 			var result *Result
-			for result == nil || result.Value == p.filter {
+			result = job.Do()
+			for (result == nil) || (result.Value == p.filter) {
+				// timeout or error result
 				// p.in <- id
 				result = job.Do() // retry, indefinitely
-				<-time.After(time.Second)
+				p.retrycount++
+				// <-time.After(time.Second)
 			}
 			p.out <- result
 			// p.stat <- job
@@ -206,14 +211,18 @@ func (p *ParallelDownloader) SendTo(w io.Writer) {
 }
 
 func (p *ParallelDownloader) ReportHead() {
-	log.Printf("%8s %8s %8s\n", "doing", "done", "diff") // todo: cpu, mem, traffic, job duration histogram, moving average? average, eta
+	log.Printf("%-8s %-8s +%-8s %-8s +%-8s\n", "doing", "done", "diff", "rdone", "rdiff") // todo: cpu, mem, traffic, job duration histogram, moving average? average, eta
 }
 
 func (p *ParallelDownloader) ReportOnce() {
 	current := p.counter
 	diff := current - p.prevcount
 	p.prevcount = current
-	log.Printf("%8d %8d %8d\n", p.Len(), current, diff)
+
+	rcurrent := p.retrycount
+	rdiff := rcurrent - p.prevretrycount
+	p.prevretrycount = rcurrent
+	log.Printf("%-8d %-8d +%-8d %-8d +%-8d\n", p.Len(), current, diff, rcurrent, rdiff)
 }
 
 func (p *ParallelDownloader) ReportStart(d int) {

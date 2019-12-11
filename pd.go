@@ -27,8 +27,10 @@ func main() {
 	pd := New(config.Jobs, config.Template)
 	go pd.ScanFrom(os.Stdin)
 	go pd.SendTo(os.Stdout)
-	go pd.ReportStart(config.ReportInterval)
-	defer pd.ReportStop()
+	if config.Report {
+		go pd.ReportStart(config.ReportInterval)
+		defer pd.ReportStop()
+	}
 	pd.Run()
 }
 
@@ -77,8 +79,9 @@ type Job struct {
 // Config holds command line flags
 func parseFlags() *Config {
 	config := &Config{}
-	flag.StringVar(&config.Template, "t", "", "url template, like https://example.com/%s.json")
+	flag.StringVar(&config.Template, "t", "https://hacker-news.firebaseio.com/v0/item/%s.json", "url template, like https://example.com/%s.json")
 	flag.IntVar(&config.Jobs, "j", 3, "parallel jobs")
+	flag.BoolVar(&config.Report, "r", false, "turn report on")
 	flag.IntVar(&config.ReportInterval, "i", 1, "report interval")
 	flag.Parse()
 	return config
@@ -87,6 +90,7 @@ func parseFlags() *Config {
 type Config struct {
 	Jobs           int
 	Template       string
+	Report         bool
 	ReportInterval int
 }
 
@@ -138,21 +142,13 @@ func (p *ParallelDownloader) Run() {
 		}
 		p.Add()
 		go func() {
-			defer p.Done()
+			defer p.Done() // will always run whether retry or normal return
 			job := p.Job(id)
-			result := job.Do()
-			if result == nil {
-				result := job.Do()
-				if result == nil {
-					result := job.Do()
-					if result == nil {
-						result := job.Do()
-						if result == nil {
-							log.Println("retry failed:", id)
-							return
-						}
-					}
-				}
+			var result *Result
+			for result == nil {
+				// p.in <- id 
+				result = job.Do() // retry, indefinitely
+				<- time.After(time.Second)
 			}
 			p.out <- result
 			// p.stat <- job

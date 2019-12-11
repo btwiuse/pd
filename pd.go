@@ -27,7 +27,7 @@ func main() {
 	pd := New(config.Jobs, config.Template)
 	go pd.ScanFrom(os.Stdin)
 	go pd.SendTo(os.Stdout)
-	if config.Report {
+	if config.EnableReport {
 		go pd.ReportStart(config.ReportInterval)
 		defer pd.ReportStop()
 	}
@@ -81,7 +81,7 @@ func parseFlags() *Config {
 	config := &Config{}
 	flag.StringVar(&config.Template, "t", "https://hacker-news.firebaseio.com/v0/item/%s.json", "url template, like https://example.com/%s.json")
 	flag.IntVar(&config.Jobs, "j", 3, "parallel jobs")
-	flag.BoolVar(&config.Report, "r", false, "turn report on")
+	flag.BoolVar(&config.EnableReport, "r", false, "turn report on")
 	flag.IntVar(&config.ReportInterval, "i", 1, "report interval")
 	flag.Parse()
 	return config
@@ -90,7 +90,7 @@ func parseFlags() *Config {
 type Config struct {
 	Jobs           int
 	Template       string
-	Report         bool
+	EnableReport         bool
 	ReportInterval int
 }
 

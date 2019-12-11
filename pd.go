@@ -28,8 +28,8 @@ func main() {
 	go pd.ScanFrom(os.Stdin)
 	go pd.SendTo(os.Stdout)
 	go pd.ReportStart(config.ReportInterval)
+	defer pd.ReportStop()
 	pd.Run()
-	pd.ReportStop()
 }
 
 // Factory manufactores Job
@@ -47,6 +47,10 @@ type Factory struct {
 
 // Job downloads url
 func (j *Job) Do() *Result {
+	j.start = time.Now()
+	defer func(){
+		j.end = time.Now()
+	}()
 	resp, err := http.Get(j.url)
 	if err != nil {
 		log.Println(err)
@@ -64,6 +68,8 @@ func (j *Job) Do() *Result {
 }
 
 type Job struct {
+	start time.Time
+	end time.Time
 	id  string
 	url string
 }
@@ -116,6 +122,7 @@ type ParallelDownloader struct {
 	*Factory
 	*swg.WaitGroup
 	counter int
+	prevcount int
 	lctx    context.Context
 	lcancel context.CancelFunc
 }
@@ -132,13 +139,14 @@ func (p *ParallelDownloader) Run() {
 		p.Add()
 		go func() {
 			defer p.Done()
-			result := p.Job(id).Do()
+			job := p.Job(id)
+			result := job.Do()
 			if result == nil {
-				result = p.Job(id).Do()
+				result := job.Do()
 				if result == nil {
-					result = p.Job(id).Do()
+					result := job.Do()
 					if result == nil {
-						result = p.Job(id).Do()
+						result := job.Do()
 						if result == nil {
 							log.Println("retry failed:", id)
 							return
@@ -147,6 +155,7 @@ func (p *ParallelDownloader) Run() {
 				}
 			}
 			p.out <- result
+			// p.stat <- job
 		}()
 	}
 	p.Wait() // prevent pending goroutines sending to a closed channel
@@ -182,11 +191,14 @@ func (p *ParallelDownloader) SendTo(w io.Writer) {
 }
 
 func (p *ParallelDownloader) ReportHead() {
-	log.Printf("%8s %8s\n", "doing", "done")
+	log.Printf("%8s %8s %8s\n", "doing", "done", "diff") // todo: cpu, mem, traffic, job duration histogram, moving average? average, eta
 }
 
 func (p *ParallelDownloader) ReportOnce() {
-	log.Printf("%8d %8d\n", p.Len(), p.counter)
+	current := p.counter
+	diff := current - p.prevcount
+	p.prevcount = current
+	log.Printf("%8d %8d %8d\n", p.Len(), current, diff)
 }
 
 func (p *ParallelDownloader) ReportStart(d int) {

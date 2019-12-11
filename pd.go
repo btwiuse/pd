@@ -24,7 +24,7 @@ import (
 
 func main() {
 	config := parseFlags()
-	pd := New(config.Jobs, config.Template)
+	pd := New(config.Jobs, config.Template, config.Filter)
 	go pd.ScanFrom(os.Stdin)
 	go pd.SendTo(os.Stdout)
 	if config.EnableReport {
@@ -83,6 +83,7 @@ func parseFlags() *Config {
 	flag.IntVar(&config.Jobs, "j", 3, "parallel jobs")
 	flag.BoolVar(&config.EnableReport, "r", false, "turn report on")
 	flag.IntVar(&config.ReportInterval, "i", 1, "report interval")
+	flag.StringVar(&config.Filter, "f", "Too Many Requests (HAP429).\n", "filter output")
 	flag.Parse()
 	return config
 }
@@ -92,6 +93,7 @@ type Config struct {
 	Template       string
 	EnableReport         bool
 	ReportInterval int
+	Filter string
 }
 
 // Result is Job result
@@ -108,9 +110,10 @@ func (r *Result) String() string {
 }
 
 // ParallelDownloader wraps Qlock and Factory
-func New(j int, t string) *ParallelDownloader {
+func New(j int, t string, f string) *ParallelDownloader {
 	lctx, lcancel := context.WithCancel(context.Background())
 	return &ParallelDownloader{
+		filter:    f,
 		in:        make(chan string),
 		out:       make(chan *Result),
 		Factory:   &Factory{t},
@@ -121,6 +124,7 @@ func New(j int, t string) *ParallelDownloader {
 }
 
 type ParallelDownloader struct {
+	filter string
 	in  chan string
 	out chan *Result
 	*Factory
@@ -145,7 +149,7 @@ func (p *ParallelDownloader) Run() {
 			defer p.Done() // will always run whether retry or normal return
 			job := p.Job(id)
 			var result *Result
-			for result == nil {
+			for result == nil || result.Value == p.filter {
 				// p.in <- id 
 				result = job.Do() // retry, indefinitely
 				<- time.After(time.Second)

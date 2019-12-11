@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -50,10 +51,24 @@ type Factory struct {
 // Job downloads url
 func (j *Job) Do() *Result {
 	j.start = time.Now()
-	defer func(){
+	defer func() {
 		j.end = time.Now()
 	}()
-	resp, err := http.Get(j.url)
+
+	// default http client doesn't have timeout, here we add it
+	// https://medium.com/@nate510/don-t-use-go-s-default-http-client-4804cb19f779
+	var netTransport = &http.Transport{
+		Dial: (&net.Dialer{
+			Timeout: 5 * time.Second,
+		}).Dial,
+		TLSHandshakeTimeout: 5 * time.Second,
+	}
+	var netClient = &http.Client{
+		Timeout:   time.Second * 10,
+		Transport: netTransport,
+	}
+
+	resp, err := netClient.Get(j.url)
 	if err != nil {
 		log.Println(err)
 		return nil
@@ -71,9 +86,9 @@ func (j *Job) Do() *Result {
 
 type Job struct {
 	start time.Time
-	end time.Time
-	id  string
-	url string
+	end   time.Time
+	id    string
+	url   string
 }
 
 // Config holds command line flags
@@ -91,9 +106,9 @@ func parseFlags() *Config {
 type Config struct {
 	Jobs           int
 	Template       string
-	EnableReport         bool
+	EnableReport   bool
 	ReportInterval int
-	Filter string
+	Filter         string
 }
 
 // Result is Job result
@@ -125,14 +140,14 @@ func New(j int, t string, f string) *ParallelDownloader {
 
 type ParallelDownloader struct {
 	filter string
-	in  chan string
-	out chan *Result
+	in     chan string
+	out    chan *Result
 	*Factory
 	*swg.WaitGroup
-	counter int
+	counter   int
 	prevcount int
-	lctx    context.Context
-	lcancel context.CancelFunc
+	lctx      context.Context
+	lcancel   context.CancelFunc
 }
 
 func (p *ParallelDownloader) Run() {
@@ -150,9 +165,9 @@ func (p *ParallelDownloader) Run() {
 			job := p.Job(id)
 			var result *Result
 			for result == nil || result.Value == p.filter {
-				// p.in <- id 
+				// p.in <- id
 				result = job.Do() // retry, indefinitely
-				<- time.After(time.Second)
+				<-time.After(time.Second)
 			}
 			p.out <- result
 			// p.stat <- job

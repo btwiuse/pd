@@ -72,5 +72,5 @@ $ cat hndump | jq -c .
 the output is unsorted because they are downloaded in parallel, `pd` only guarantees the result of each id is written to output before exit.
 
 ## References
-https://dave.cheney.net/2014/03/19/channel-axioms
-http://blog.golang.org/pipelines
+- https://dave.cheney.net/2014/03/19/channel-axioms
+- http://blog.golang.org/pipelines

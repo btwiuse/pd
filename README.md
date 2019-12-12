@@ -71,6 +71,20 @@ $ cat hndump | jq -c .
 
 the output is unsorted because they are downloaded in parallel, `pd` only guarantees the result of each id is written to output before exit.
 
+If the response body is itself a json string, you can use the `fromjson` filter from `jq` to convert it to normal json object.
+```
+$ echo navigaid/mathador | pd -t https://hub.docker.com/v2/repositories/%s/dockerfile/ | jq -r '.Value|fromjson|.contents'
+FROM frebib/alpine-cmake AS builder
+COPY . /Mathador
+WORKDIR /Mathador
+RUN cmake . && make && cp mathador /bin/mathador && cat .gitignore | xargs -n1 rm -rf
+
+FROM alpine:latest
+RUN apk add --no-cache libgcc libstdc++
+COPY --from=builder /bin/mathador /bin/mathador
+ENTRYPOINT ["/bin/mathador"]
+```
+
 ## References
 - https://dave.cheney.net/2014/03/19/channel-axioms
 - http://blog.golang.org/pipelines

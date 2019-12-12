@@ -1,4 +1,4 @@
-module pd
+module github.com/btwiuse/pd
 
 go 1.13
 

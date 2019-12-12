@@ -16,26 +16,31 @@ import (
 	"strings"
 	"time"
 
-	"pd/swg"
-
+	"github.com/btwiuse/pd/swg"
 	"github.com/btwiuse/pretty"
 )
 
-// stdin -> ScanFrom -> pd.in -> Run -> pd.out -> SendTo -> stdout
+// data flow:
+// os.Stdin -> ScanFrom -> pd.in -> Run(parallel download) -> pd.out -> SendTo -> os.Stdout
 
 func main() {
 	config := parseFlags()
+
+	if config.PrintPid {
+		log.Println("pid:", os.Getpid())
+	}
+
 	pd := New(config.Jobs, config.Template, config.Filter)
-	go pd.ScanFrom(os.Stdin)
-	go pd.SendTo(os.Stdout)
+
 	if config.EnableReport {
 		go pd.ReportStart(config.ReportInterval)
 		defer pd.ReportStop()
 	}
-	pd.Run()
+
+	pd.Run(os.Stdout, os.Stdin)
 }
 
-// Factory manufactores Job
+// Factory creates Job
 func (j *Factory) Job(id string) *Job {
 	return &Job{
 		id:  id,
@@ -45,7 +50,6 @@ func (j *Factory) Job(id string) *Job {
 
 type Factory struct {
 	template string
-	// timeout time.Duration
 }
 
 // Job downloads url
@@ -59,18 +63,18 @@ func (j *Job) Do() *Result {
 	// https://medium.com/@nate510/don-t-use-go-s-default-http-client-4804cb19f779
 	var netTransport = &http.Transport{
 		Dial: (&net.Dialer{
-			Timeout: 5 * time.Second,
+			Timeout: 3 * time.Second,
 		}).Dial,
-		TLSHandshakeTimeout: 5 * time.Second,
+		TLSHandshakeTimeout: 3 * time.Second,
 	}
 	var netClient = &http.Client{
-		Timeout:   time.Second * 10,
+		Timeout:   time.Second * 6,
 		Transport: netTransport,
 	}
 
 	resp, err := netClient.Get(j.url)
 	if err != nil {
-		log.Println(err)
+		// log.Println(err)
 		return nil
 	}
 	body, err := ioutil.ReadAll(resp.Body)
@@ -95,9 +99,10 @@ type Job struct {
 func parseFlags() *Config {
 	config := &Config{}
 	flag.StringVar(&config.Template, "t", "https://hacker-news.firebaseio.com/v0/item/%s.json", "url template, like https://example.com/%s.json")
-	flag.IntVar(&config.Jobs, "j", 3, "parallel jobs")
+	flag.IntVar(&config.Jobs, "j", 3, "number of max parallel jobs")
+	flag.BoolVar(&config.PrintPid, "p", false, "print pid")
 	flag.BoolVar(&config.EnableReport, "r", false, "turn report on")
-	flag.IntVar(&config.ReportInterval, "i", 1, "report interval")
+	flag.IntVar(&config.ReportInterval, "i", 1000, "report interval (in millisecond)")
 	flag.StringVar(&config.Filter, "f", "Too Many Requests (HAP429).\n", "filter output")
 	flag.Parse()
 	return config
@@ -106,6 +111,7 @@ func parseFlags() *Config {
 type Config struct {
 	Jobs           int
 	Template       string
+	PrintPid       bool
 	EnableReport   bool
 	ReportInterval int
 	Filter         string
@@ -152,36 +158,69 @@ type ParallelDownloader struct {
 	lcancel        context.CancelFunc
 }
 
-func (p *ParallelDownloader) Run() {
-	for { // id := range p.in { // avoid range here!!
-		id := <-p.in
+func (p *ParallelDownloader) Run(w io.Writer, r io.Reader) {
+	go p.ScanFrom(r)
+	go p.SendTo(w)
+	for {
 		// https://dave.cheney.net/2014/03/19/channel-axioms
 		// A receive from a closed channel returns the zero value immediately
-		// which implies io.EOF from Scan
+		// thus we know io.EOF is reached from ScanFrom and break the loop accordingly
+		id := <-p.in
 		if id == "" {
 			break
 		}
+
+		/*
+			// following parameter tuning slows down new job creation speed when job timeout/retry emerges,
+			// so we have lower error rate. it applies specifically to the following use case
+			//
+			// $ cat ../containers | go run ./pd.go -r -j 50 -i 1000 -t https://hub.docker.com/v2/repositories/%s/dockerfile/ >dockerfiles
+			//
+			// not general enough to be useful for everyone but it's worth noting here for future reference
+			// maybe I will find a better way to do such "Too Many Requests" error control
+			switch k := float64(p.counter-p.prevcount)/float64(1+p.Len()); {
+			case 0.5 < k && k <= 0.6:
+				time.Sleep(250*time.Millisecond)
+			case 0.6 < k && k <= 0.7:
+				time.Sleep(360*time.Millisecond)
+			case 0.7 < k && k <= 1:
+				time.Sleep(500*time.Millisecond)
+			case k >= 1:
+				time.Sleep(600*time.Millisecond)
+			}
+			// if p.Len() > 20 { }
+			time.Sleep(time.Duration(p.retrycount-p.prevretrycount) * 200 * time.Millisecond)
+		*/
+
 		p.Add()
 		go func() {
-			defer p.Done() // will always run whether retry or normal return
+			defer p.Done() // will always run under timeout/retry or normal return
 			job := p.Job(id)
 			var result *Result
 			result = job.Do()
-			for (result == nil) || (result.Value == p.filter) {
-				// timeout or error result
-				// p.in <- id
-				result = job.Do() // retry, indefinitely
+			// timeout or bad result
+			if (result == nil) || (result.Value == p.filter) {
+				// retry after one second
+				go func() {
+					time.Sleep(1000 * time.Millisecond)
+					p.in <- id
+					// TODO: make ScanFrom wait id from this goroutine (if any) before it closes p.in
+					// because sending to closed channel will make the program panic
+					// if timeout/error rate is low enough, we are not likely to hit the bug
+					// that's why we need error control
+				}()
 				p.retrycount++
-				// <-time.After(time.Second)
+				return
 			}
 			p.out <- result
 			// p.stat <- job
 		}()
 	}
-	p.Wait() // prevent pending goroutines sending to a closed channel
-	// all results are written to p.out, but are they all written to logger?
+	// prevent pending job goroutines from sending result to a closed channel
+	p.Wait()
 	p.Add()
 	close(p.out)
+	// make sure all results are written to logger
 	p.Wait()
 }
 
@@ -211,7 +250,7 @@ func (p *ParallelDownloader) SendTo(w io.Writer) {
 }
 
 func (p *ParallelDownloader) ReportHead() {
-	log.Printf("%-8s %-8s +%-8s %-8s +%-8s\n", "doing", "done", "diff", "rdone", "rdiff") // todo: cpu, mem, traffic, job duration histogram, moving average? average, eta
+	log.Printf("%8s %8s %8s %-8s +%-8s %-8s +%-8s\n", "cap", "len", "limit", "done", "diff", "rdone", "rdiff") // todo: cpu, mem, traffic, job duration histogram, moving average, average, eta, etc.
 }
 
 func (p *ParallelDownloader) ReportOnce() {
@@ -222,7 +261,7 @@ func (p *ParallelDownloader) ReportOnce() {
 	rcurrent := p.retrycount
 	rdiff := rcurrent - p.prevretrycount
 	p.prevretrycount = rcurrent
-	log.Printf("%-8d %-8d +%-8d %-8d +%-8d\n", p.Len(), current, diff, rcurrent, rdiff)
+	log.Printf("%8d %8d %8d %-8d +%-8d %-8d +%-8d\n", p.Cap(), p.Len(), p.Limit, current, diff, rcurrent, rdiff)
 }
 
 func (p *ParallelDownloader) ReportStart(d int) {
@@ -230,7 +269,7 @@ func (p *ParallelDownloader) ReportStart(d int) {
 	for {
 		p.ReportOnce()
 		select {
-		case <-time.After(time.Duration(d) * time.Second):
+		case <-time.After(time.Duration(d) * time.Millisecond):
 		case <-p.lctx.Done():
 			return
 		}

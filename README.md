@@ -16,7 +16,7 @@ Internally `pd` makes heavy use of channel operations, articles on this can be f
 
 ## Install
 ```bash
-$ go get -u github.com/btwiuse/pd
+$ go install github.com/btwiuse/pd@latest
 ```
 
 ## Usage

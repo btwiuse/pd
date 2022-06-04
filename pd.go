@@ -65,6 +65,7 @@ func (j *Job) Do() *Result {
 		Dial: (&net.Dialer{
 			Timeout: 3 * time.Second,
 		}).Dial,
+		Proxy:               http.ProxyFromEnvironment,
 		TLSHandshakeTimeout: 3 * time.Second,
 	}
 	var netClient = &http.Client{
@@ -200,6 +201,7 @@ func (p *ParallelDownloader) Run(w io.Writer, r io.Reader) {
 			result = job.Do()
 			// timeout or bad result
 			if (result == nil) || (result.Value == p.filter) {
+				return
 				// retry after one second
 				go func() {
 					time.Sleep(1000 * time.Millisecond)

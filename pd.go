@@ -84,8 +84,9 @@ func (j *Job) Do() *Result {
 		return nil
 	}
 	return &Result{
-		Id:    j.id,
-		Value: string(body),
+		Id:     j.id,
+		Status: resp.StatusCode,
+		Value:  string(body),
 	}
 }
 
@@ -120,8 +121,9 @@ type Config struct {
 
 // Result is Job result
 type Result struct {
-	Id    string `json:id`
-	Value string `json:value`
+	Id     string `json:id`
+	Status int    `json:status`
+	Value  string `json:value`
 }
 
 func (r *Result) String() string {

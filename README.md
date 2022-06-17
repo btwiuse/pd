@@ -8,7 +8,7 @@ I'm pretty sure there are other solutions out there that are way better than min
 And if you find one, please let me know by opening a issue :)
 
 ## Design
-`pd` is made to work with Unix pipeline, it reads input from stdin line by line, each line is assigned to a variable called `id`, and each `id` will be applied against a predefined template, usually of the form `https://hacker-news.firebaseio.com/v0/item/%s.json`, producing a valid url, for each url `pd` will spawn a goroutine to download the content, and then the response body `resp` is encoded into a single line json along with `id`, in the format `{"Id": id, "Value", resp}`
+`pd` is made to work with Unix pipeline, it reads input from stdin line by line, each line is assigned to a variable called `id`, and each `id` will be applied against a predefined template, usually of the form `https://hacker-news.firebaseio.com/v0/item/%s.json`, producing a valid url, for each url `pd` will spawn a goroutine to download the content, and then the response body `resp` is encoded into a single line json along with `id`, in the format `{"Id": "1337", "Status": 200, "Value": "null"}`
 
 Internally `pd` makes heavy use of channel operations, articles on this can be found in the References section. The `ParallelDownloader` structs has two channels, it reads `id`s from the `in` channel and send results to the `out` channel. In the middle `pd` uses something called "sized wait group" or `swg` to do job control, defined under the `./swg` directory. Basically a `swg` is like normal `sync.WaitGroup` but `Add()` blocks when it reaches a certain limit.
 

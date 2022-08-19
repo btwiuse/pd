@@ -61,13 +61,14 @@ func (j *Job) Do() *Result {
 
 	// default http client doesn't have timeout, here we add it
 	// https://medium.com/@nate510/don-t-use-go-s-default-http-client-4804cb19f779
-	var netTransport = &http.Transport{
+	var netTransport http.RoundTripper = &http.Transport{
 		Dial: (&net.Dialer{
 			Timeout: 3 * time.Second,
 		}).Dial,
 		Proxy:               http.ProxyFromEnvironment,
 		TLSHandshakeTimeout: 3 * time.Second,
 	}
+	netTransport = http.DefaultTransport
 	var netClient = &http.Client{
 		Timeout:   time.Second * 6,
 		Transport: netTransport,

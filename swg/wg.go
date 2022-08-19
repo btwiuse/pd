@@ -2,9 +2,7 @@ package swg
 
 import (
 	"os"
-	"os/signal"
 	"sync"
-	"syscall"
 )
 
 func (wg *WaitGroup) Cap() int {
@@ -31,16 +29,6 @@ func (wg *WaitGroup) Done() {
 }
 
 func (wg *WaitGroup) Notify(sigs ...os.Signal) {
-	signal.Notify(wg.sig, sigs...)
-	for {
-		sig := <-wg.sig
-		switch sig {
-		case syscall.SIGUSR1:
-			wg.Limit /= 2
-		case syscall.SIGUSR2:
-			wg.Limit += 10
-		}
-	}
 }
 
 type WaitGroup struct {
@@ -57,6 +45,6 @@ func New(j int) *WaitGroup {
 		Limit:     j,
 		sig:       make(chan os.Signal, 1),
 	}
-	go wg.Notify(syscall.SIGUSR1, syscall.SIGUSR2)
+	go wg.Notify()
 	return wg
 }
